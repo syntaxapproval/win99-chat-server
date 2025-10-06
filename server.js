@@ -85,7 +85,7 @@ io.on('connection', (socket) => {
     const message = {
       id: Date.now() + Math.random(),
       username: user.username,
-      content: messageData.content,
+      text: messageData.text || messageData.content,
       timestamp: new Date().toISOString(),
       client: user.client
     };
@@ -93,7 +93,7 @@ io.on('connection', (socket) => {
     // Broadcast to all connected clients
     io.emit('new-message', message);
     
-    console.log(`${user.username}: ${messageData.content}`);
+    console.log(`${user.username}: ${messageData.text || messageData.content}`);
   });
   
   // Handle user disconnect
