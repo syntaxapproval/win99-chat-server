@@ -55,5 +55,3 @@ The server tracks:
 - Client types (WinChat vs MS-DOS)
 - Message throughput
 - Uptime
-
-Perfect for Railway's usage-based billing model.
