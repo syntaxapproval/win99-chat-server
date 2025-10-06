@@ -2,9 +2,11 @@ const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const Filter = require('bad-words');
 
 const app = express();
 const server = createServer(app);
+const filter = new Filter();
 
 // CORS configuration for Windows 99 project
 app.use(cors({
@@ -46,19 +48,61 @@ app.get('/health', (req, res) => {
   });
 });
 
+/**
+ * Generate unique username by appending numbers if duplicate exists
+ * @param {string} requestedUsername - The username the user wants
+ * @returns {string} - Unique username (original or with number suffix)
+ */
+function generateUniqueUsername(requestedUsername) {
+  const existingUsernames = Array.from(connectedUsers.values()).map(u => u.username);
+  
+  // If username doesn't exist, return it as-is
+  if (!existingUsernames.includes(requestedUsername)) {
+    return requestedUsername;
+  }
+  
+  // Username exists, append numbers until we find a unique one
+  let counter = 2;
+  let candidateUsername = `${requestedUsername}${counter}`;
+  
+  while (existingUsernames.includes(candidateUsername)) {
+    counter++;
+    candidateUsername = `${requestedUsername}${counter}`;
+  }
+  
+  return candidateUsername;
+}
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   
   // User joins chat
   socket.on('join-chat', (userData) => {
+    let requestedUsername = userData.username || `User${Math.floor(Math.random() * 1000)}`;
+    
+    // Filter profanity from username
+    if (filter.isProfane(requestedUsername)) {
+      requestedUsername = filter.clean(requestedUsername);
+      console.log(`Filtered profane username: ${userData.username} -> ${requestedUsername}`);
+    }
+    
+    // Generate unique username (handles duplicates)
+    const finalUsername = generateUniqueUsername(requestedUsername);
+    
     const user = {
       id: socket.id,
-      username: userData.username || `User${Math.floor(Math.random() * 1000)}`,
-      client: userData.client || 'unknown', // 'winchat' or 'msdos'
+      username: finalUsername,
+      client: userData.client || userData.clientType || 'unknown',
       joinTime: new Date().toISOString()
     };
     
     connectedUsers.set(socket.id, user);
+    
+    // Send back the actual username assigned to the client
+    socket.emit('username-assigned', { 
+      username: finalUsername,
+      wasChanged: finalUsername !== userData.username
+    });
     
     // Notify all clients of new user
     socket.broadcast.emit('user-joined', {
@@ -74,7 +118,8 @@ io.on('connection', (socket) => {
     }));
     socket.emit('user-list', userList);
     
-    console.log(`${user.username} joined from ${user.client}`);
+    console.log(`${user.username} joined from ${user.client}` + 
+                (finalUsername !== userData.username ? ` (requested: ${userData.username})` : ''));
   });
   
   // Handle chat messages
@@ -82,10 +127,18 @@ io.on('connection', (socket) => {
     const user = connectedUsers.get(socket.id);
     if (!user) return;
     
+    let messageText = messageData.text || messageData.content || '';
+    
+    // Filter profanity from message
+    if (filter.isProfane(messageText)) {
+      messageText = filter.clean(messageText);
+      console.log(`Filtered profane message from ${user.username}`);
+    }
+    
     const message = {
       id: Date.now() + Math.random(),
       username: user.username,
-      text: messageData.text || messageData.content,
+      text: messageText,
       timestamp: new Date().toISOString(),
       client: user.client
     };
@@ -93,7 +146,7 @@ io.on('connection', (socket) => {
     // Broadcast to all connected clients
     io.emit('new-message', message);
     
-    console.log(`${user.username}: ${messageData.text || messageData.content}`);
+    console.log(`${user.username}: ${messageText}`);
   });
   
   // Handle user disconnect
