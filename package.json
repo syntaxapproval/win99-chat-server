@@ -1,7 +1,7 @@
 {
   "name": "win99-chat-server",
-  "version": "1.0.0",
-  "description": "WebSocket chat server for Windows 99 native chat system",
+  "version": "1.1.0",
+  "description": "WebSocket chat server for Windows 99 native chat system with duplicate username prevention and profanity filter",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,7 +10,8 @@
   "dependencies": {
     "socket.io": "^4.7.5",
     "express": "^4.18.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "bad-words": "^3.0.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
