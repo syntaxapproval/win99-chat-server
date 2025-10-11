@@ -49,6 +49,40 @@ app.get('/health', (req, res) => {
 });
 
 /**
+ * Parse and roll dice notation (e.g., "2d6", "1d20", "d6")
+ * @param {string} notation - Dice notation
+ * @returns {object} - { total, results, error }
+ */
+function rollDice(notation) {
+  // Parse dice notation: XdY where X is number of dice, Y is number of sides
+  const match = notation.match(/^(\d*)d(\d+)$/i);
+  
+  if (!match) {
+    return { error: 'Invalid dice notation. Use format: XdY (e.g., 2d6, 1d20, d6)' };
+  }
+  
+  const numDice = parseInt(match[1] || '1');
+  const numSides = parseInt(match[2]);
+  
+  if (numDice < 1 || numDice > 100) {
+    return { error: 'Number of dice must be between 1 and 100' };
+  }
+  
+  if (numSides < 2 || numSides > 1000) {
+    return { error: 'Number of sides must be between 2 and 1000' };
+  }
+  
+  const results = [];
+  for (let i = 0; i < numDice; i++) {
+    results.push(Math.floor(Math.random() * numSides) + 1);
+  }
+  
+  const total = results.reduce((sum, val) => sum + val, 0);
+  
+  return { total, results };
+}
+
+/**
  * Generate unique username by appending numbers if duplicate exists
  * @param {string} requestedUsername - The username the user wants
  * @returns {string} - Unique username (original or with number suffix)
@@ -123,13 +157,86 @@ io.on('connection', (socket) => {
   });
 
     
-  // Handle request for user list - OUTSIDE join-chat handler
+  // Handle request for user list
   socket.on('get-user-list', () => {
     const userList = Array.from(connectedUsers.values()).map(u => ({
       username: u.username,
       client: u.client
     }));
     socket.emit('user-list', userList);
+  });
+  
+  // Handle chat commands
+  socket.on('chat-command', (commandData) => {
+    const user = connectedUsers.get(socket.id);
+    if (!user) return;
+    
+    const { command, args, clientTime } = commandData;
+    
+    switch (command) {
+      case 'ping':
+        // Send back latency
+        const latency = Date.now() - (clientTime || Date.now());
+        socket.emit('command-response', {
+          command: 'ping',
+          message: `Pong! Latency: ${latency}ms`
+        });
+        break;
+        
+      case 'time':
+        // Send server time
+        const serverTime = new Date().toLocaleString();
+        socket.emit('command-response', {
+          command: 'time',
+          message: `Server time: ${serverTime}`
+        });
+        break;
+        
+      case 'roll':
+        // Roll dice
+        const diceNotation = args[0] || '1d6';
+        const rollResult = rollDice(diceNotation);
+        
+        if (rollResult.error) {
+          socket.emit('command-response', {
+            command: 'roll',
+            message: rollResult.error
+          });
+        } else {
+          // Broadcast to all users
+          io.emit('system-message', {
+            message: `${user.username} rolled ${diceNotation}: ${rollResult.total}${rollResult.results.length > 1 ? ` (${rollResult.results.join(', ')})` : ''}`,
+            timestamp: new Date().toISOString()
+          });
+        }
+        break;
+        
+      case 'flip':
+        // Flip coin
+        const coinResult = Math.random() < 0.5 ? 'Heads' : 'Tails';
+        io.emit('system-message', {
+          message: `${user.username} flipped a coin: ${coinResult}`,
+          timestamp: new Date().toISOString()
+        });
+        break;
+        
+      case 'me':
+        // Action message
+        const action = args.join(' ');
+        if (action) {
+          io.emit('system-message', {
+            message: `* ${user.username} ${action}`,
+            timestamp: new Date().toISOString()
+          });
+        }
+        break;
+        
+      default:
+        socket.emit('command-response', {
+          command: command,
+          message: `Unknown command: !${command}. Type !help for available commands.`
+        });
+    }
   });
   
   // Handle chat messages
