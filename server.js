@@ -85,7 +85,7 @@ io.on('connection', (socket) => {
       requestedUsername = filter.clean(requestedUsername);
       console.log(`Filtered profane username: ${userData.username} -> ${requestedUsername}`);
     }
-    
+
     // Generate unique username (handles duplicates)
     const finalUsername = generateUniqueUsername(requestedUsername);
     
@@ -120,6 +120,16 @@ io.on('connection', (socket) => {
     
     console.log(`${user.username} joined from ${user.client}` + 
                 (finalUsername !== userData.username ? ` (requested: ${userData.username})` : ''));
+  });
+
+    
+  // Handle request for user list - OUTSIDE join-chat handler
+  socket.on('get-user-list', () => {
+    const userList = Array.from(connectedUsers.values()).map(u => ({
+      username: u.username,
+      client: u.client
+    }));
+    socket.emit('user-list', userList);
   });
   
   // Handle chat messages
