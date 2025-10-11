@@ -184,12 +184,49 @@ io.on('connection', (socket) => {
         break;
         
       case 'time':
-        // Send server time
-        const serverTime = new Date().toLocaleString();
+        // Send server time (time only, no date)
+        const now = new Date();
+        const serverTime = now.toLocaleTimeString();
         socket.emit('command-response', {
           command: 'time',
           message: `Server time: ${serverTime}`
         });
+        break;
+        
+      case 'uptime':
+        // Show server uptime
+        const uptimeSeconds = Math.floor(process.uptime());
+        const hours = Math.floor(uptimeSeconds / 3600);
+        const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+        const seconds = uptimeSeconds % 60;
+        socket.emit('command-response', {
+          command: 'uptime',
+          message: `Server uptime: ${hours}h ${minutes}m ${seconds}s`
+        });
+        break;
+        
+      case '8ball':
+        // Magic 8-ball
+        if (args.length === 0) {
+          socket.emit('command-response', {
+            command: '8ball',
+            message: 'Ask a question! (e.g., !8ball Will I pass the test?)'
+          });
+        } else {
+          const responses = [
+            'It is certain', 'Without a doubt', 'Yes definitely', 'You may rely on it',
+            'As I see it, yes', 'Most likely', 'Outlook good', 'Signs point to yes',
+            'Reply hazy try again', 'Ask again later', 'Better not tell you now',
+            'Cannot predict now', 'Concentrate and ask again',
+            'Don\'t count on it', 'My reply is no', 'My sources say no',
+            'Outlook not so good', 'Very doubtful'
+          ];
+          const answer = responses[Math.floor(Math.random() * responses.length)];
+          io.emit('system-message', {
+            message: `${user.username} asked the Magic 8-Ball: "${args.join(' ')}" - ${answer}`,
+            timestamp: new Date().toISOString()
+          });
+        }
         break;
         
       case 'roll':
