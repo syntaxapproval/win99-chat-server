@@ -35,13 +35,15 @@ const io = new Server(server, {
     credentials: true
   }
 });
- 
+
 // Connected users tracking
 const connectedUsers = new Map();
 
 // Admin system
 const adminUsers = new Set(); // Track socket IDs with admin privileges
 const mutedUsers = new Map(); // Track muted users: socketId -> expirationTime
+const bannedUsers = new Set(); // Track banned usernames (lowercase)
+const bannedIPs = new Set(); // Track banned IP addresses
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme123'; // Set in Railway!
 
 /**
@@ -122,9 +124,30 @@ function generateUniqueUsername(requestedUsername) {
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
   
+  // Check if IP is banned
+  const clientIP = socket.handshake.address;
+  if (bannedIPs.has(clientIP)) {
+    console.log(`Banned IP attempted to connect: ${clientIP}`);
+    socket.emit('banned', {
+      reason: 'Your IP address has been banned from this server'
+    });
+    socket.disconnect(true);
+    return;
+  }
+  
   // User joins chat
   socket.on('join-chat', (userData) => {
     let requestedUsername = userData.username || `User${Math.floor(Math.random() * 1000)}`;
+    
+    // Check if username is banned
+    if (bannedUsers.has(requestedUsername.toLowerCase())) {
+      console.log(`Banned user attempted to join: ${requestedUsername}`);
+      socket.emit('banned', {
+        reason: 'Your username has been banned from this server'
+      });
+      socket.disconnect(true);
+      return;
+    }
     
     // Filter profanity from username
     if (filter.isProfane(requestedUsername)) {
@@ -283,6 +306,7 @@ io.on('connection', (socket) => {
       case 'admin':
         // Grant admin privileges with password
         const password = args.join(' ');
+        console.log(`Admin attempt - Received password: "${password}", Expected: "${ADMIN_PASSWORD}"`);
         if (password === ADMIN_PASSWORD) {
           adminUsers.add(socket.id);
           connectedUsers.get(socket.id).isAdmin = true;
@@ -492,6 +516,110 @@ io.on('connection', (socket) => {
           socket.emit('command-response', {
             command: 'announce',
             message: 'Usage: !announce <message>'
+          });
+        }
+        break;
+        
+      case 'ban':
+        // Ban user from server (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'ban',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const banTargetUsername = args[0];
+        const banReason = args.slice(1).join(' ') || 'No reason given';
+        
+        if (!banTargetUsername) {
+          socket.emit('command-response', {
+            command: 'ban',
+            message: 'Usage: !ban <username> [reason]'
+          });
+          return;
+        }
+        
+        // Find target user
+        const banTarget = Array.from(connectedUsers.entries())
+          .find(([id, u]) => u.username.toLowerCase() === banTargetUsername.toLowerCase());
+        
+        if (banTarget) {
+          const [targetId, targetData] = banTarget;
+          const targetSocket = io.sockets.sockets.get(targetId);
+          const targetIP = targetSocket?.handshake.address;
+          
+          // Add to ban lists
+          bannedUsers.add(targetData.username.toLowerCase());
+          if (targetIP) {
+            bannedIPs.add(targetIP);
+          }
+          
+          // Notify the banned user
+          io.to(targetId).emit('banned', {
+            reason: banReason,
+            by: user.username
+          });
+          
+          // Broadcast to chat
+          io.emit('system-message', {
+            message: `${targetData.username} was permanently banned by ${user.username} (${banReason})`,
+            timestamp: new Date().toISOString()
+          });
+          
+          console.log(`${targetData.username} banned by ${user.username}: ${banReason} (IP: ${targetIP})`);
+          
+          // Disconnect the user
+          setTimeout(() => {
+            if (targetSocket) {
+              targetSocket.disconnect(true);
+            }
+          }, 1000);
+        } else {
+          // User not currently online, just add username to ban list
+          bannedUsers.add(banTargetUsername.toLowerCase());
+          socket.emit('command-response', {
+            command: 'ban',
+            message: `Username "${banTargetUsername}" has been banned (user not currently online)`
+          });
+          console.log(`Username ${banTargetUsername} banned by ${user.username} (offline ban)`);
+        }
+        break;
+        
+      case 'unban':
+        // Unban user (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'unban',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const unbanTargetUsername = args[0];
+        
+        if (!unbanTargetUsername) {
+          socket.emit('command-response', {
+            command: 'unban',
+            message: 'Usage: !unban <username>'
+          });
+          return;
+        }
+        
+        const lowercaseUnbanTarget = unbanTargetUsername.toLowerCase();
+        
+        if (bannedUsers.has(lowercaseUnbanTarget)) {
+          bannedUsers.delete(lowercaseUnbanTarget);
+          io.emit('system-message', {
+            message: `${unbanTargetUsername} was unbanned by ${user.username}`,
+            timestamp: new Date().toISOString()
+          });
+          console.log(`${unbanTargetUsername} unbanned by ${user.username}`);
+        } else {
+          socket.emit('command-response', {
+            command: 'unban',
+            message: `Username "${unbanTargetUsername}" is not banned`
           });
         }
         break;
