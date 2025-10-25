@@ -39,6 +39,18 @@ const io = new Server(server, {
 // Connected users tracking
 const connectedUsers = new Map();
 
+// Admin system
+const adminUsers = new Set(); // Track socket IDs with admin privileges
+const mutedUsers = new Map(); // Track muted users: socketId -> expirationTime
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'changeme123'; // Set in Railway!
+
+/**
+ * Check if a socket has admin privileges
+ */
+function isAdmin(socketId) {
+  return adminUsers.has(socketId);
+}
+
 // Simple health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
@@ -268,6 +280,222 @@ io.on('connection', (socket) => {
         }
         break;
         
+      case 'admin':
+        // Grant admin privileges with password
+        const password = args.join(' ');
+        if (password === ADMIN_PASSWORD) {
+          adminUsers.add(socket.id);
+          connectedUsers.get(socket.id).isAdmin = true;
+          socket.emit('command-response', {
+            command: 'admin',
+            message: '✓ Admin privileges granted. You can now use moderation commands.'
+          });
+          console.log(`Admin privileges granted to ${user.username}`);
+        } else {
+          socket.emit('command-response', {
+            command: 'admin',
+            message: '✗ Invalid admin password'
+          });
+          console.log(`Failed admin login attempt from ${user.username}`);
+        }
+        break;
+        
+      case 'kick':
+        // Kick user from chat (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'kick',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const kickTargetUsername = args[0];
+        const kickReason = args.slice(1).join(' ') || 'No reason given';
+        
+        if (!kickTargetUsername) {
+          socket.emit('command-response', {
+            command: 'kick',
+            message: 'Usage: !kick <username> [reason]'
+          });
+          return;
+        }
+        
+        // Find target user
+        const kickTarget = Array.from(connectedUsers.entries())
+          .find(([id, u]) => u.username.toLowerCase() === kickTargetUsername.toLowerCase());
+        
+        if (kickTarget) {
+          const [targetId, targetData] = kickTarget;
+          
+          // Notify the kicked user
+          io.to(targetId).emit('kicked', {
+            reason: kickReason,
+            by: user.username
+          });
+          
+          // Broadcast to chat
+          io.emit('system-message', {
+            message: `${targetData.username} was kicked by ${user.username} (${kickReason})`,
+            timestamp: new Date().toISOString()
+          });
+          
+          console.log(`${targetData.username} kicked by ${user.username}: ${kickReason}`);
+          
+          // Disconnect the user
+          setTimeout(() => {
+            const targetSocket = io.sockets.sockets.get(targetId);
+            if (targetSocket) {
+              targetSocket.disconnect(true);
+            }
+          }, 1000); // Give them a moment to see the message
+        } else {
+          socket.emit('command-response', {
+            command: 'kick',
+            message: `User "${kickTargetUsername}" not found`
+          });
+        }
+        break;
+        
+      case 'mute':
+        // Mute user temporarily (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'mute',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const muteTargetUsername = args[0];
+        const muteDuration = parseInt(args[1]) || 5; // Default 5 minutes
+        
+        if (!muteTargetUsername) {
+          socket.emit('command-response', {
+            command: 'mute',
+            message: 'Usage: !mute <username> [minutes]'
+          });
+          return;
+        }
+        
+        // Find target user
+        const muteTarget = Array.from(connectedUsers.entries())
+          .find(([id, u]) => u.username.toLowerCase() === muteTargetUsername.toLowerCase());
+        
+        if (muteTarget) {
+          const [targetId, targetData] = muteTarget;
+          const expiresAt = Date.now() + (muteDuration * 60 * 1000);
+          mutedUsers.set(targetId, expiresAt);
+          
+          // Notify the muted user
+          io.to(targetId).emit('muted', {
+            duration: muteDuration,
+            by: user.username
+          });
+          
+          // Broadcast to chat
+          io.emit('system-message', {
+            message: `${targetData.username} was muted by ${user.username} for ${muteDuration} minute(s)`,
+            timestamp: new Date().toISOString()
+          });
+          
+          console.log(`${targetData.username} muted by ${user.username} for ${muteDuration} minutes`);
+          
+          // Auto-unmute after duration
+          setTimeout(() => {
+            if (mutedUsers.has(targetId)) {
+              mutedUsers.delete(targetId);
+              io.to(targetId).emit('unmuted');
+              io.emit('system-message', {
+                message: `${targetData.username} has been automatically unmuted`,
+                timestamp: new Date().toISOString()
+              });
+              console.log(`${targetData.username} auto-unmuted`);
+            }
+          }, muteDuration * 60 * 1000);
+        } else {
+          socket.emit('command-response', {
+            command: 'mute',
+            message: `User "${muteTargetUsername}" not found`
+          });
+        }
+        break;
+        
+      case 'unmute':
+        // Unmute user (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'unmute',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const unmuteTargetUsername = args[0];
+        
+        if (!unmuteTargetUsername) {
+          socket.emit('command-response', {
+            command: 'unmute',
+            message: 'Usage: !unmute <username>'
+          });
+          return;
+        }
+        
+        // Find target user
+        const unmuteTarget = Array.from(connectedUsers.entries())
+          .find(([id, u]) => u.username.toLowerCase() === unmuteTargetUsername.toLowerCase());
+        
+        if (unmuteTarget) {
+          const [targetId, targetData] = unmuteTarget;
+          
+          if (mutedUsers.has(targetId)) {
+            mutedUsers.delete(targetId);
+            io.to(targetId).emit('unmuted');
+            io.emit('system-message', {
+              message: `${targetData.username} was unmuted by ${user.username}`,
+              timestamp: new Date().toISOString()
+            });
+            console.log(`${targetData.username} unmuted by ${user.username}`);
+          } else {
+            socket.emit('command-response', {
+              command: 'unmute',
+              message: `${targetData.username} is not muted`
+            });
+          }
+        } else {
+          socket.emit('command-response', {
+            command: 'unmute',
+            message: `User "${unmuteTargetUsername}" not found`
+          });
+        }
+        break;
+        
+      case 'announce':
+        // Server-wide announcement (admin only)
+        if (!isAdmin(socket.id)) {
+          socket.emit('command-response', {
+            command: 'announce',
+            message: '✗ You do not have permission to use this command'
+          });
+          return;
+        }
+        
+        const announcement = args.join(' ');
+        if (announcement) {
+          io.emit('system-message', {
+            message: `[SERVER ANNOUNCEMENT] ${announcement}`,
+            timestamp: new Date().toISOString(),
+            isAnnouncement: true
+          });
+          console.log(`Announcement by ${user.username}: ${announcement}`);
+        } else {
+          socket.emit('command-response', {
+            command: 'announce',
+            message: 'Usage: !announce <message>'
+          });
+        }
+        break;
+        
       default:
         socket.emit('command-response', {
           command: command,
@@ -280,6 +508,16 @@ io.on('connection', (socket) => {
   socket.on('chat-message', (messageData) => {
     const user = connectedUsers.get(socket.id);
     if (!user) return;
+    
+    // Check if user is muted
+    if (mutedUsers.has(socket.id)) {
+      const expiresAt = mutedUsers.get(socket.id);
+      const remainingMinutes = Math.ceil((expiresAt - Date.now()) / 60000);
+      socket.emit('command-response', {
+        message: `You are currently muted. Time remaining: ${remainingMinutes} minute(s)`
+      });
+      return;
+    }
     
     let messageText = messageData.text || messageData.content || '';
     
@@ -307,6 +545,11 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => {
     const user = connectedUsers.get(socket.id);
     if (user) {
+      // Remove from admin list if they were admin
+      adminUsers.delete(socket.id);
+      
+      // Remove from muted list if they were muted
+      mutedUsers.delete(socket.id);
       // Notify other users
       socket.broadcast.emit('user-left', {
         username: user.username,
