@@ -649,6 +649,57 @@ io.on('connection', (socket) => {
     
     let messageText = messageData.text || messageData.content || '';
     
+    // Check for whisper command: @username message
+    const whisperMatch = messageText.match(/^@(\S+)\s+(.+)$/);
+    
+    if (whisperMatch) {
+      const targetUsername = whisperMatch[1];
+      const whisperMessage = whisperMatch[2];
+      
+      // Find target user
+      const targetUser = Array.from(connectedUsers.entries())
+        .find(([id, u]) => u.username.toLowerCase() === targetUsername.toLowerCase());
+      
+      if (targetUser) {
+        const [targetId, targetData] = targetUser;
+        
+        // Filter profanity from whisper message
+        let filteredMessage = whisperMessage;
+        if (filter.isProfane(whisperMessage)) {
+          filteredMessage = filter.clean(whisperMessage);
+          console.log(`Filtered profane whisper from ${user.username}`);
+        }
+        
+        const whisperPayload = {
+          id: Date.now() + Math.random(),
+          username: user.username,
+          text: filteredMessage,
+          timestamp: new Date().toISOString(),
+          client: user.client,
+          isWhisper: true,
+          whisperTo: targetData.username
+        };
+        
+        // Send to target user
+        io.to(targetId).emit('whisper-message', whisperPayload);
+        
+        // Send confirmation back to sender
+        socket.emit('whisper-message', {
+          ...whisperPayload,
+          whisperFrom: user.username // Mark as sent whisper
+        });
+        
+        console.log(`Whisper from ${user.username} to ${targetData.username}: ${filteredMessage}`);
+      } else {
+        // Target user not found
+        socket.emit('command-response', {
+          message: `User "${targetUsername}" not found or offline`
+        });
+      }
+      return;
+    }
+    
+    // Regular message (not a whisper)
     // Filter profanity from message
     if (filter.isProfane(messageText)) {
       messageText = filter.clean(messageText);
