@@ -648,6 +648,7 @@ io.on('connection', (socket) => {
     }
     
     let messageText = messageData.text || messageData.content || '';
+    const messageColor = messageData.color || '#000000'; // Default to black
     
     // Check for whisper command: @username message
     const whisperMatch = messageText.match(/^@(\S+)\s+(.+)$/);
@@ -677,7 +678,8 @@ io.on('connection', (socket) => {
           timestamp: new Date().toISOString(),
           client: user.client,
           isWhisper: true,
-          whisperTo: targetData.username
+          whisperTo: targetData.username,
+          color: messageColor
         };
         
         // Send to target user
@@ -711,7 +713,8 @@ io.on('connection', (socket) => {
       username: user.username,
       text: messageText,
       timestamp: new Date().toISOString(),
-      client: user.client
+      client: user.client,
+      color: messageColor
     };
     
     // Broadcast to all connected clients
